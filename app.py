@@ -1,18 +1,21 @@
+from datetime import date, timedelta
 from flask import Flask, jsonify, request
-from flask_sqlalchemy import SQLAlchemy
-from datetime import date
 from flask_marshmallow import Marshmallow
 from flask_bcrypt import Bcrypt
 from sqlalchemy.exc import IntegrityError
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager, create_access_token
 
 app = Flask(__name__)
-app.config ['JSON_SORT_KEYS'] = False
 
+app.config ['JSON_SORT_KEYS'] = False
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+pyscopg2://trello_dev:password123@127.0.0.1:5432/trello'
+app.config['JWT_SECRET_KEY'] = 'hello there'
 
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
 bcrypt = Bcrypt(app)
+jtw = JWTManager(app)
 
 class User(db.model):
     __talename__ = 'users'
@@ -22,7 +25,7 @@ class User(db.model):
     password = db.column(db.string, ullable=False)
     is_admin = db.column(db.boolean, default = False)
 
-class UserSchema(ma.schema):
+class UserSchema(ma.Schema):
     class Meta:
         fields = ('id', 'name', 'email', 'password', 'is_admin')
 
@@ -42,8 +45,7 @@ class CardSchema(ma.Schema):
         feilds = ('id', 'title', 'description', 'status', 'priority', 'date')
         ordered = True
 
-
-# Define custom CLI terminal comman 
+# Define custom CLI terminal command
 @app.cli.command('create')
 def create_db():
     db.create_all()
@@ -59,13 +61,13 @@ def seed_db():
     users = [
         User(
             email="admin@spam.com",
-            password=bcrypt.generate_password_hash("eggs").decode("utf-8")
+            password=bcrypt.generate_password_hash("eggs").decode("utf-8"),
             is_admin=True
         ),
         User(
             name="Sonny Davidson",
             email="someone@spam.com",
-            password =bcrypt.generate_password_hash("12345").decode("utf-8")
+            password=bcrypt.generate_password_hash("12345").decode("utf-8")
         )
     ]
 
@@ -101,7 +103,7 @@ def seed_db():
     ]
 
     db.session.add_all(cards)
-    db.session.add.all(users)
+    db.session.add_all(users)
     db.session.commit()
     print('table seeded')
 
@@ -110,31 +112,46 @@ def seed_db():
 @app.route('/auth/register/', methods=['POST'])
 def auth_register():
     try:
-        user_info = UserSchema().load(request.json)
         user = User(
-            email = user_info['email'],
-            password = bcyrpt.generate_password_hash(user_info['password']).decode('utf80'),
-            name = user_info['name']
+            email = request.json['email'],
+            password = bcrypt.generate_password_hash(request.json['password']).decode('utf80'),
+            name = request.json['name']
         )
         
         # add an commit useer to DB
-        db.sosseion.add(user)
+        db.session.add(user)
         db.session.commit()
         #respond to client 
-        return UserSchema(exclude=['password']).dump(user), 201
+        return UserSchema(exclude=['password']).dump(user), 
     except IntegrityError:
         return{'error' : 'email address already used'}, 409
 
+@app.route('/auth/login/', methods=['POST'])
+def auth_login():
+    # find a user by email address
+    stmt = db.select(User).filter_by(email=request.json['username'])
+    User.db.sesson.sclar(stmt)
+    # if user exists and password is correct
+    if User and bcrypt.check_password_hash(User.password, request.json['password']):
+        # return UserSchema(exclude=['password']).dump(User)
+        token = create_access_token(identity=str(User.id), expires_delta=timedelta(days=1))
+        return {'email':User.email, 'token':token, 'is_admin': User.is_admin}
+    else:
+        return{{'error':'invalid password or email'}}, 401
+
+
 @app.route('/cards/')
+@jwt_required()
+
 def all_cards():
     # cards = Card.query.all() 
     # print(cards[0].__dict__)
     # stmt = db.select(Card).where(Card.status == 'To Do ')
     stmt = db.select(Card).order_by(Card.priority.desc(), Card.title)
     cards = db.session.scalars(stmt).all()
-    return CardSchema(many=True).dump(cards)
+    return CardSchema(many=True).dump(User)
 
-@app.cli.command('first_card')
+@app.cli.command('first_card') 
 def first_card():
     stmt = db.select(Card).limit(1)
     card = db.session.scalar(stmt)
